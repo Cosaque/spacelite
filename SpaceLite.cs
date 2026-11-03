@@ -1295,6 +1295,8 @@ namespace SpaceLite
     class DetailsPanel : UserControl
     {
         public event Action<Node, bool> NodePicked;   // (noeud, zoom)
+        public event Action<string> SearchRequested;
+        TextBox txtQuery;
         TabControl tabs;
         TabPage tpTree, tpTop, tpTypes, tpAge, tpFind;
         TreeView tree;
@@ -1335,6 +1337,24 @@ namespace SpaceLite
             tpTypes.Controls.Add(lvTypes);
             tpAge.Controls.Add(lvAge);
             tpFind.Controls.Add(lvFind);
+            Panel bar = new Panel();
+            bar.Dock = DockStyle.Top;
+            bar.Height = 30;
+            Button go = new Button();
+            go.Text = "Rechercher";
+            go.Dock = DockStyle.Right;
+            go.Width = 85;
+            txtQuery = new TextBox();
+            txtQuery.Dock = DockStyle.Fill;
+            txtQuery.KeyDown += delegate(object s2, KeyEventArgs e2)
+            {
+                if (e2.KeyCode == Keys.Enter && SearchRequested != null) { SearchRequested(txtQuery.Text); e2.Handled = true; e2.SuppressKeyPress = true; }
+            };
+            go.Click += delegate { if (SearchRequested != null) SearchRequested(txtQuery.Text); };
+            bar.Controls.Add(txtQuery);
+            bar.Controls.Add(go);
+            bar.Padding = new Padding(2, 4, 2, 2);
+            tpFind.Controls.Add(bar);
             tabs.TabPages.AddRange(new TabPage[] { tpTree, tpTop, tpTypes, tpAge, tpFind });
             Controls.Add(tabs);
         }
@@ -1515,6 +1535,13 @@ namespace SpaceLite
                     NumCell(total > 0 ? ageSize[i] * 1000 / total : 0, (total > 0 ? ageSize[i] * 100.0 / total : 0).ToString("F1"))));
         }
 
+        public void FocusSearch()
+        {
+            tabs.SelectedTab = tpFind;
+            txtQuery.Focus();
+            txtQuery.SelectAll();
+        }
+
         public string[] Search(string text)
         {
             lvFind.BeginUpdate();
@@ -1555,7 +1582,6 @@ namespace SpaceLite
         Splitter split;
         bool panelStale = true;
         ToolStripButton btnPanel, btnExport;
-        ToolStripTextBox txtFind;
         ToolStripDropDownButton btnOpen;
         ToolStripButton btnDepthLess, btnDepthMore, btnDiag, btnAdmin;
         readonly bool isAdmin = IsAdmin();
@@ -1608,9 +1634,6 @@ namespace SpaceLite
             ss.Items.Add(lblHover);
 
             ToolStrip ts = new ToolStrip();
-            ToolStripLabel lblFind = new ToolStripLabel("Rechercher :");
-            lblFind.Image = Icons.Make("search");
-            lblFind.ImageAlign = ContentAlignment.MiddleCenter;
             ts.GripStyle = ToolStripGripStyle.Hidden;
             btnOpen = new ToolStripDropDownButton("Ouvrir");
             btnOpen.ShowDropDownArrow = true;
@@ -1639,15 +1662,6 @@ namespace SpaceLite
             btnPanel.Checked = cfg.ShowPanel;
             btnExport = new ToolStripButton("Exporter", Icons.Make("export"), delegate { ExportCsv(); });
             btnExport.ToolTipText = "Exporter la vue en CSV (dossiers et fichiers de plus de 10 Mo)";
-            txtFind = new ToolStripTextBox();
-            txtFind.AutoSize = false;
-            txtFind.Width = 130;
-            txtFind.ToolTipText = "Rechercher un nom dans la vue (Entree) - Ctrl+F";
-            txtFind.KeyDown += delegate(object s2, KeyEventArgs e2)
-            {
-                if (e2.KeyCode == Keys.Enter) { DoSearch(); e2.Handled = true; e2.SuppressKeyPress = true; }
-            };
-
             ts.Items.Add(btnOpen);
             ts.Items.Add(btnReload);
             ts.Items.Add(btnCancel);
@@ -1675,13 +1689,10 @@ namespace SpaceLite
             ts.Items.Add(btnDiag);
             ts.Items.Add(new ToolStripButton("Options", Icons.Make("options"), delegate { ShowSetup(); }));
             ts.Items.Add(new ToolStripButton("A propos", Icons.Make("about"), delegate { ShowAbout(); }));
-            ts.Items.Add(new ToolStripSeparator());
-            ts.Items.Add(lblFind);
-            ts.Items.Add(txtFind);
             ts.ImageScalingSize = new Size(Icons.Size, Icons.Size);
             foreach (ToolStripItem it in ts.Items)
             {
-                if (it is ToolStripSeparator || it == txtFind || it == lblFind) continue;
+                if (it is ToolStripSeparator) continue;
                 it.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
                 it.TextImageRelation = TextImageRelation.ImageAboveText;
             }
@@ -1690,6 +1701,7 @@ namespace SpaceLite
             panel.Dock = DockStyle.Right;
             panel.Width = cfg.PanelWidth;
             panel.NodePicked += Reveal;
+            panel.SearchRequested += DoSearch;
             split = new Splitter();
             split.Dock = DockStyle.Right;
             split.Width = 5;
@@ -1722,9 +1734,9 @@ namespace SpaceLite
             {
                 if (e.KeyCode == Keys.Back) { GoUp(); e.Handled = true; }
                 else if (e.KeyCode == Keys.F5) { StartScan(curPath); }
-                else if (e.KeyCode == Keys.Delete && !txtFind.Focused && !panel.ContainsFocus) { DeleteNode(view.Selected); }
+                else if (e.KeyCode == Keys.Delete && !panel.ContainsFocus) { DeleteNode(view.Selected); }
                 else if (e.KeyCode == Keys.F4) { TogglePanel(); }
-                else if (e.Control && e.KeyCode == Keys.F) { txtFind.Focus(); e.Handled = true; }
+                else if (e.Control && e.KeyCode == Keys.F) { if (!panel.Visible) TogglePanel(); panel.FocusSearch(); e.Handled = true; }
             };
             FormClosing += delegate
             {
@@ -2003,11 +2015,10 @@ namespace SpaceLite
             view.Select(n);
         }
 
-        void DoSearch()
+        void DoSearch(string text)
         {
-            string q = txtFind.Text.Trim();
+            string q = text.Trim();
             if (q.Length == 0 || view.Root == null) return;
-            if (!panel.Visible) TogglePanel();
             string[] r = panel.Search(q);
             lblInfo.Text = r[0] + (r[1] == "1" ? "+" : "") + " resultat(s) pour \"" + q + "\" dans " + view.Root.FullPath;
         }
