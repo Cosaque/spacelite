@@ -1,5 +1,10 @@
 # Journal des versions
 
+## 1.1 (en cours)
+- Chemins réseau : Ouvrir > « Chemin réseau (UNC)... » (saisie de `\\\\serveur\\partage`, connexion avec un autre compte possible, mot de passe non enregistré).
+- Pas de test d'existence bloquant sur un chemin UNC ; message clair si le chemin est illisible.
+- Sur un partage ou un lecteur réseau, la suppression est définitive (pas de corbeille) : avertissement renforcé, « Non » par défaut.
+
 ## 1.0
 - Panneau de détails (F4) : arborescence, plus gros fichiers, types de fichiers, âge, recherche par nom (Ctrl+F).
 - Export CSV de la vue (dossiers, et fichiers de plus de 10 Mo).

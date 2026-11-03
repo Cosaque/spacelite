@@ -388,6 +388,63 @@ namespace SpaceLite
     // ------------------------------------------------------------------
     static class Util
     {
+        // ---- Chemins reseau (UNC) ----
+        public static bool IsUnc(string path)
+        {
+            return path != null && path.StartsWith("\\\\") && !path.StartsWith("\\\\?\\");
+        }
+
+        // \\serveur\partage pour \\serveur\partage\dossier ; null si ce n'est pas un chemin UNC complet.
+        public static string ShareRoot(string path)
+        {
+            if (!IsUnc(path)) return null;
+            string[] parts = path.Substring(2).Split(new char[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2) return null;
+            return "\\\\" + parts[0] + "\\" + parts[1];
+        }
+
+        // Partage UNC ou lecteur mappe : pas de corbeille, la suppression y est definitive.
+        public static bool IsNetworkPath(string path)
+        {
+            if (IsUnc(path)) return true;
+            try
+            {
+                string root = System.IO.Path.GetPathRoot(path);
+                return !string.IsNullOrEmpty(root) && new DriveInfo(root).DriveType == DriveType.Network;
+            }
+            catch (Exception) { return false; }
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        class NetResource
+        {
+            public int dwScope;
+            public int dwType;
+            public int dwDisplayType;
+            public int dwUsage;
+            public string lpLocalName;
+            public string lpRemoteName;
+            public string lpComment;
+            public string lpProvider;
+        }
+
+        [DllImport("mpr.dll", CharSet = CharSet.Unicode)]
+        static extern int WNetAddConnection2(NetResource nr, string password, string username, int flags);
+
+        // Ouvre une session sur un partage avec d'autres identifiants (sans lettre de lecteur, non memorisee).
+        // Renvoie null si tout va bien, sinon le message d'erreur Windows.
+        public static string Connect(string share, string user, string password)
+        {
+            NetResource nr = new NetResource();
+            nr.dwType = 1;   // RESOURCETYPE_DISK
+            nr.lpRemoteName = share;
+            int rc = WNetAddConnection2(nr, password, user, 0);
+            if (rc == 0) return null;
+            string msg = new System.ComponentModel.Win32Exception(rc).Message;
+            if (rc == 1219) msg += "\n\nUne connexion existe deja sur ce serveur avec un autre compte. Fermez-la (commande : net use " + share + " /delete) puis recommencez.";
+            return msg + " (code " + rc + ")";
+        }
+
         public static string FormatSize(long b)
         {
             string[] u = { "o", "Ko", "Mo", "Go", "To" };
@@ -1681,7 +1738,7 @@ namespace SpaceLite
             ts.Items.Add(btnExport);
             ts.Items.Add(new ToolStripSeparator());
             btnAdmin = new ToolStripButton("Admin", Icons.Make("shield"), delegate { RestartAsAdmin(); });
-            btnAdmin.ToolTipText = "Relancer SpaceLite en administrateur (acces aux dossiers proteges ; le glisser-deposer ne fonctionne plus en mode administrateur)";
+            btnAdmin.ToolTipText = "Relancer SpaceLite en administrateur (acces aux dossiers proteges). En mode administrateur, le glisser-deposer ne marche plus et les lecteurs reseau mappes ne sont plus visibles : utilisez Ouvrir > Chemin reseau (UNC)";
             btnAdmin.Enabled = !isAdmin;
             ts.Items.Add(btnAdmin);
             btnDiag = new ToolStripButton("Diagnostic", Icons.Make("diag"), delegate { ShowDiagnostic(); });
@@ -1848,6 +1905,7 @@ namespace SpaceLite
             if (btnOpen.DropDownItems.Count == 0) btnOpen.DropDownItems.Add("(aucun lecteur)").Enabled = false;
             btnOpen.DropDownItems.Add(new ToolStripSeparator());
             btnOpen.DropDownItems.Add("Dossier...", Icons.Make("folder"), delegate { Browse(); });
+            btnOpen.DropDownItems.Add("Chemin reseau (UNC)...", Icons.Make("drive"), delegate { BrowseNetwork(); });
         }
 
         // ---- Analyse ----
@@ -1862,10 +1920,59 @@ namespace SpaceLite
             }
         }
 
+        void BrowseNetwork()
+        {
+            using (Form f = new Form())
+            {
+                f.Text = "Chemin reseau";
+                f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                f.StartPosition = FormStartPosition.CenterParent;
+                f.MaximizeBox = false;
+                f.MinimizeBox = false;
+                f.ShowInTaskbar = false;
+                f.ClientSize = new Size(460, 220);
+                Label l1 = new Label { Text = "Chemin (ex. \\\\serveur\\partage ou \\\\serveur\\partage\\dossier) :", Left = 12, Top = 12, Width = 436 };
+                TextBox tp = new TextBox { Left = 12, Top = 34, Width = 436 };
+                if (Util.IsUnc(curPath)) tp.Text = curPath;
+                CheckBox cc = new CheckBox { Text = "Se connecter avec un autre compte", Left = 12, Top = 70, Width = 436 };
+                Label l2 = new Label { Text = "Utilisateur (DOMAINE\\nom) :", Left = 30, Top = 100, Width = 160, Enabled = false };
+                TextBox tu = new TextBox { Left = 190, Top = 97, Width = 258, Enabled = false };
+                Label l3 = new Label { Text = "Mot de passe :", Left = 30, Top = 130, Width = 160, Enabled = false };
+                TextBox tw = new TextBox { Left = 190, Top = 127, Width = 258, UseSystemPasswordChar = true, Enabled = false };
+                cc.CheckedChanged += delegate { l2.Enabled = tu.Enabled = l3.Enabled = tw.Enabled = cc.Checked; };
+                Label l4 = new Label { Text = "Le mot de passe n'est ni enregistre ni ecrit dans le .ini.", Left = 12, Top = 160, Width = 436, ForeColor = SystemColors.GrayText };
+                Button ok = new Button { Text = "Analyser", DialogResult = DialogResult.OK, Left = 282, Top = 184, Width = 80 };
+                Button cancel = new Button { Text = "Annuler", DialogResult = DialogResult.Cancel, Left = 368, Top = 184, Width = 80 };
+                f.AcceptButton = ok;
+                f.CancelButton = cancel;
+                f.Controls.AddRange(new Control[] { l1, tp, cc, l2, tu, l3, tw, l4, ok, cancel });
+                if (f.ShowDialog(this) != DialogResult.OK) return;
+                string path = tp.Text.Trim().Trim('"');
+                if (!Util.IsUnc(path) || Util.ShareRoot(path) == null)
+                {
+                    MessageBox.Show("Saisissez un chemin du type \\\\serveur\\partage.", "SpaceLite", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                if (cc.Checked && tu.Text.Trim().Length > 0)
+                {
+                    Cursor = Cursors.WaitCursor;
+                    string err;
+                    try { err = Util.Connect(Util.ShareRoot(path), tu.Text.Trim(), tw.Text); }
+                    finally { Cursor = Cursors.Default; tw.Text = ""; }
+                    if (err != null)
+                    {
+                        MessageBox.Show("Connexion impossible :\n" + err, "SpaceLite", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+                StartScan(path);
+            }
+        }
+
         void StartScan(string path)
         {
             if (worker != null && worker.IsAlive) return;
-            if (string.IsNullOrEmpty(path) || !Directory.Exists(path))
+            if (string.IsNullOrEmpty(path) || (!Util.IsUnc(path) && !Directory.Exists(path)))
             {
                 if (!string.IsNullOrEmpty(path))
                     MessageBox.Show("Dossier introuvable : " + path, "SpaceLite", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1913,6 +2020,12 @@ namespace SpaceLite
             if (r != null) PrepareFreeSpace(r);
             SetBusy(false);
             view.Message = "Aucun resultat.";
+            if (r != null && !cancelled && r.Children.Count == 0 && scanner != null && scanner.UnreadCount > 0)
+            {
+                view.Message = "Chemin inaccessible.";
+                MessageBox.Show("Impossible de lire " + r.FullPath + "\n\nVerifiez le chemin, le reseau et vos droits (menu Ouvrir > Chemin reseau permet de saisir un autre compte).",
+                    "SpaceLite", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
             panelStale = true;
             SetView(r);
             if (r != null)
@@ -1923,6 +2036,7 @@ namespace SpaceLite
         // Bloc "espace libre" : seulement si on a analyse la racine d'un lecteur.
         void PrepareFreeSpace(Node r)
         {
+            if (Util.IsUnc(r.FullPath)) return;   // la capacite d'un partage n'est pas celle du volume
             try
             {
                 string root = System.IO.Path.GetPathRoot(r.FullPath);
@@ -2439,19 +2553,30 @@ namespace SpaceLite
         {
             if (n == null || n.Parent == null) return;
             string what = n.IsDir ? "le dossier" : "le fichier";
-            if (MessageBox.Show("Mettre " + what + " a la corbeille ?\n\n" + n.FullPath + "\n(" + Util.FormatSize(n.Size) + ")",
+            bool permanent = Util.IsNetworkPath(n.FullPath);   // pas de corbeille sur un partage reseau
+            if (permanent)
+            {
+                if (MessageBox.Show("ATTENTION : " + what + " est sur le reseau, il n'y a pas de corbeille.\nLa suppression est DEFINITIVE.\n\n" +
+                        n.FullPath + "\n(" + Util.FormatSize(n.Size) + ")\n\nSupprimer definitivement ?",
+                        "Suppression definitive", MessageBoxButtons.YesNo, MessageBoxIcon.Stop, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                    return;
+            }
+            else if (MessageBox.Show("Mettre " + what + " a la corbeille ?\n\n" + n.FullPath + "\n(" + Util.FormatSize(n.Size) + ")",
                     "Confirmation", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 return;
+            Microsoft.VisualBasic.FileIO.RecycleOption ro = permanent
+                ? Microsoft.VisualBasic.FileIO.RecycleOption.DeletePermanently
+                : Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin;
             try
             {
                 if (n.IsDir)
                     Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(n.FullPath,
                         Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                        ro);
                 else
                     Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(n.FullPath,
                         Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                        ro);
             }
             catch (Exception ex)
             {
