@@ -14,7 +14,7 @@ Analyseur d'espace disque pour Windows : un treemap (carte des fichiers par tail
 - Clic : sélectionner. Double-clic : entrer dans un dossier. Retour arrière / Zoom - : remonter.
 - Zoom tout / + / -, Niveaux -/+ (profondeur affichée), Espace libre, Lancer, Supprimer (corbeille).
 - **Détails (F4)** : arborescence avec % du parent, 300 plus gros fichiers, répartition par type, répartition
-  par âge, recherche par nom (Ctrl+F). Colonnes triables, clic droit : Explorateur / copier le chemin.
+  par âge, doublons, recherche par nom (Ctrl+F). Colonnes triables, clic droit : Explorateur / copier le chemin.
 - **Exporter** : CSV (dossiers et fichiers de plus de 10 Mo) de la vue courante.
 - **Admin** : relance en administrateur pour lire les dossiers protégés. **Diagnostic** : écart entre l'espace
   compté et l'espace utilisé du lecteur, liens, dossiers non lus.
