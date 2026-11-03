@@ -2,7 +2,7 @@
 // Cible : C# 5 / .NET Framework 4 (compilable avec le csc.exe fourni par Windows).
 // Un seul fichier volontairement : facile a lire, a modifier et a compiler.
 //
-// SpaceLite est un logiciel independant (licence MIT, voir LICENSE).
+// SpaceLite est un logiciel independant de Cosaque (licence MIT, voir LICENSE).
 // Certaines parties (disposition par bissection equilibree, seuils de densite, palettes de couleurs, rendu
 // biseaute) derivent de SpaceMonger 1.x de Sean Werkema, MIT, (c) 1998-2020
 // (https://github.com/seanofw/spacemonger1) : voir THIRD-PARTY-NOTICES.md et LICENSE-SpaceMonger.txt.
