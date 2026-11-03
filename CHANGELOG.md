@@ -1,7 +1,6 @@
 # Journal des versions
 
 ## 1.1 (en cours)
-- Doublons (onglet du panneau) : taille puis SHA-1 partiel puis complet, en tâche de fond et annulable ; groupes triés par espace récupérable ; les liens physiques ne sont pas comptés ; « Cocher les copies » (garde la plus ancienne) et « Supprimer cochés » (corbeille, une copie au moins gardée par groupe).
 - Chemins réseau : Ouvrir > « Chemin réseau (UNC)... » (saisie de `\\\\serveur\\partage`, connexion avec un autre compte possible, mot de passe non enregistré).
 - Lecteurs réseau mappés (H:...) : plus de blocs « non compté » / « espace libre » (la capacité du volume du serveur faussait tout).
 - Pas de test d'existence bloquant sur un chemin UNC ; message clair si le chemin est illisible.

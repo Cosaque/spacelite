@@ -13,7 +13,6 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
-using System.Linq;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
@@ -1350,139 +1349,10 @@ namespace SpaceLite
         }
     }
 
-    // ------------------------------------------------------------------
-    // Recherche de doublons : taille, puis SHA-1 des 64 premiers Ko, puis SHA-1 complet.
-    // Les liens physiques (meme fichier sous plusieurs noms, ex. WinSxS) ne sont pas des doublons.
-    // ------------------------------------------------------------------
-    class DupFinder
-    {
-        public volatile bool Cancel;
-        public volatile int Done;
-        public int Total;
-        public volatile string Current = "";
-        public volatile int Found;
-
-        [StructLayout(LayoutKind.Sequential)]
-        struct ByHandleInfo
-        {
-            public uint Attr;
-            public System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write;
-            public uint VolSerial, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
-        }
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        static extern bool GetFileInformationByHandle(IntPtr h, out ByHandleInfo info);
-
-        static string FileKey(string path)
-        {
-            try
-            {
-                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                {
-                    ByHandleInfo i;
-                    if (!GetFileInformationByHandle(fs.SafeFileHandle.DangerousGetHandle(), out i)) return null;
-                    return i.VolSerial + ":" + i.IndexHigh + ":" + i.IndexLow;
-                }
-            }
-            catch (Exception) { return null; }
-        }
-
-        string Hash(string path, long limit)
-        {
-            try
-            {
-                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16))
-                using (System.Security.Cryptography.SHA1 h = System.Security.Cryptography.SHA1.Create())
-                {
-                    byte[] buf = new byte[1 << 18];
-                    long left = limit <= 0 ? long.MaxValue : limit;
-                    while (left > 0)
-                    {
-                        if (Cancel) return null;
-                        int n = fs.Read(buf, 0, (int)Math.Min((long)buf.Length, left));
-                        if (n <= 0) break;
-                        h.TransformBlock(buf, 0, n, null, 0);
-                        left -= n;
-                    }
-                    h.TransformFinalBlock(buf, 0, 0);
-                    return BitConverter.ToString(h.Hash);
-                }
-            }
-            catch (Exception) { return null; }
-        }
-
-        static void Put(Dictionary<string, List<Node>> d, string key, Node n)
-        {
-            List<Node> l;
-            if (!d.TryGetValue(key, out l)) { l = new List<Node>(); d[key] = l; }
-            l.Add(n);
-        }
-
-        public List<List<Node>> Run(List<List<Node>> sizeGroups)
-        {
-            List<List<Node>> res = new List<List<Node>>();
-            foreach (List<Node> sg in sizeGroups)
-            {
-                if (Cancel) break;
-                long size = sg[0].Size;
-                Dictionary<string, List<Node>> part = new Dictionary<string, List<Node>>();
-                foreach (Node n in sg)
-                {
-                    if (Cancel) break;
-                    Current = n.FullPath;
-                    string h = Hash(n.FullPath, 65536);
-                    Done++;
-                    if (h != null) Put(part, h, n);
-                }
-                foreach (List<Node> pl in part.Values)
-                {
-                    if (Cancel) break;
-                    if (pl.Count < 2) continue;
-                    List<List<Node>> full = new List<List<Node>>();
-                    if (size <= 65536) full.Add(pl);
-                    else
-                    {
-                        Dictionary<string, List<Node>> fh = new Dictionary<string, List<Node>>();
-                        foreach (Node n in pl)
-                        {
-                            if (Cancel) break;
-                            Current = n.FullPath;
-                            string h = Hash(n.FullPath, 0);
-                            if (h != null) Put(fh, h, n);
-                        }
-                        foreach (List<Node> l in fh.Values) if (l.Count >= 2) full.Add(l);
-                    }
-                    foreach (List<Node> g in full)
-                    {
-                        Dictionary<string, bool> seen = new Dictionary<string, bool>();
-                        List<Node> keep = new List<Node>();
-                        foreach (Node n in g)
-                        {
-                            string k = FileKey(n.FullPath);
-                            if (k == null || !seen.ContainsKey(k)) { if (k != null) seen[k] = true; keep.Add(n); }
-                        }
-                        if (keep.Count >= 2) { res.Add(keep); Found++; }
-                    }
-                }
-            }
-            return res;
-        }
-    }
-
     class DetailsPanel : UserControl
     {
         public event Action<Node, bool> NodePicked;   // (noeud, zoom)
         public event Action<string> SearchRequested;
-        public event Action<List<Node>> DeleteRequested;
-        TabPage tpDup;
-        ListView lvDup;
-        ComboBox cbMin;
-        Button btnDupGo, btnDupCancel, btnAuto, btnDelDup;
-        Label lblDup;
-        DupFinder finder;
-        Thread dupThread;
-        System.Windows.Forms.Timer dupTimer;
-        static readonly long[] MinSizes = { 1, 102400, 1048576, 10485760, 104857600 };
         TextBox txtQuery;
         TabControl tabs;
         TabPage tpTree, tpTop, tpTypes, tpAge, tpFind;
@@ -1500,7 +1370,6 @@ namespace SpaceLite
             tpTypes = new TabPage("Types");
             tpAge = new TabPage("Age");
             tpFind = new TabPage("Recherche");
-            tpDup = new TabPage("Doublons");
             tree = new TreeView();
             tree.Dock = DockStyle.Fill;
             tree.HideSelection = false;
@@ -1543,176 +1412,8 @@ namespace SpaceLite
             bar.Controls.Add(go);
             bar.Padding = new Padding(2, 4, 2, 2);
             tpFind.Controls.Add(bar);
-            BuildDupTab();
-            tabs.TabPages.AddRange(new TabPage[] { tpTree, tpTop, tpTypes, tpAge, tpDup, tpFind });
+            tabs.TabPages.AddRange(new TabPage[] { tpTree, tpTop, tpTypes, tpAge, tpFind });
             Controls.Add(tabs);
-        }
-
-        // ---- Doublons ----
-
-        void BuildDupTab()
-        {
-            lvDup = MakeList(new string[] { "Fichier", "Taille", "Modifie", "Dossier" }, new int[] { 150, 70, 80, 220 }, new bool[] { false, true, true, false });
-            lvDup.CheckBoxes = true;
-            lvDup.ShowGroups = true;
-            FlowLayoutPanel top = new FlowLayoutPanel();
-            top.Dock = DockStyle.Top;
-            top.Height = 32;
-            top.Padding = new Padding(2, 3, 2, 0);
-            Label l = new Label { Text = "Taille mini :", AutoSize = true, Margin = new Padding(3, 7, 3, 0) };
-            cbMin = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
-            cbMin.Items.AddRange(new object[] { "Tous", "100 Ko", "1 Mo", "10 Mo", "100 Mo" });
-            cbMin.SelectedIndex = 2;
-            btnDupGo = new Button { Text = "Rechercher", AutoSize = true };
-            btnDupCancel = new Button { Text = "Annuler", AutoSize = true, Visible = false };
-            btnDupGo.Click += delegate { StartDup(); };
-            btnDupCancel.Click += delegate { if (finder != null) finder.Cancel = true; };
-            top.Controls.AddRange(new Control[] { l, cbMin, btnDupGo, btnDupCancel });
-            FlowLayoutPanel bot = new FlowLayoutPanel();
-            bot.Dock = DockStyle.Bottom;
-            bot.Height = 32;
-            bot.Padding = new Padding(2, 2, 2, 0);
-            btnAuto = new Button { Text = "Cocher les copies", AutoSize = true };
-            btnDelDup = new Button { Text = "Supprimer cochés...", AutoSize = true };
-            new ToolTip().SetToolTip(btnAuto, "Coche, dans chaque groupe, toutes les copies sauf la plus ancienne");
-            btnAuto.Click += delegate { AutoCheck(); };
-            btnDelDup.Click += delegate { DeleteChecked(); };
-            bot.Controls.AddRange(new Control[] { btnAuto, btnDelDup });
-            lblDup = new Label { Dock = DockStyle.Bottom, Height = 34, Text = "Cherche les fichiers identiques dans la vue courante (taille, puis contenu SHA-1)." };
-            tpDup.Controls.Add(lvDup);
-            tpDup.Controls.Add(lblDup);
-            tpDup.Controls.Add(bot);
-            tpDup.Controls.Add(top);
-            dupTimer = new System.Windows.Forms.Timer();
-            dupTimer.Interval = 250;
-            dupTimer.Tick += delegate
-            {
-                DupFinder f = finder;
-                if (f != null) lblDup.Text = "Lecture " + f.Done + " / " + f.Total + " - " + f.Found + " groupe(s) - " + f.Current;
-            };
-        }
-
-        void StartDup()
-        {
-            if (scope == null || (dupThread != null && dupThread.IsAlive)) return;
-            long min = MinSizes[Math.Max(0, cbMin.SelectedIndex)];
-            Dictionary<long, List<Node>> bySize = new Dictionary<long, List<Node>>();
-            Stack<Node> st = new Stack<Node>();
-            st.Push(scope);
-            while (st.Count > 0)
-            {
-                Node n = st.Pop();
-                if (n.IsDir) { foreach (Node c in n.Children) st.Push(c); continue; }
-                if (n.IsFree || n.Size < min || n.Size <= 0) continue;
-                List<Node> l;
-                if (!bySize.TryGetValue(n.Size, out l)) { l = new List<Node>(); bySize[n.Size] = l; }
-                l.Add(n);
-            }
-            List<List<Node>> cands = new List<List<Node>>();
-            int total = 0;
-            foreach (List<Node> l in bySize.Values) if (l.Count >= 2) { cands.Add(l); total += l.Count; }
-            cands.Sort(delegate(List<Node> a, List<Node> b) { return b[0].Size.CompareTo(a[0].Size); });
-            lvDup.Items.Clear();
-            lvDup.Groups.Clear();
-            if (cands.Count == 0) { lblDup.Text = "Aucun candidat : aucun fichier de meme taille dans " + scope.FullPath + "."; return; }
-            DupFinder f2 = new DupFinder();
-            f2.Total = total;
-            finder = f2;
-            btnDupGo.Enabled = false;
-            btnDupCancel.Visible = true;
-            string scopePath = scope.FullPath;
-            dupTimer.Start();
-            dupThread = new Thread(delegate()
-            {
-                List<List<Node>> r = null;
-                try { r = f2.Run(cands); } catch (Exception) { }
-                try { BeginInvoke(new MethodInvoker(delegate { DupDone(f2, r, scopePath); })); }
-                catch (Exception) { }
-            }, 16 * 1024 * 1024);
-            dupThread.IsBackground = true;
-            dupThread.Start();
-        }
-
-        static string DupHeader(string name, int count, long size)
-        {
-            return name + " - " + count + " copies x " + Util.FormatSize(size) + " - recuperable : " + Util.FormatSize((count - 1) * size);
-        }
-
-        void DupDone(DupFinder f, List<List<Node>> r, string scopePath)
-        {
-            dupTimer.Stop();
-            btnDupGo.Enabled = true;
-            btnDupCancel.Visible = false;
-            if (r == null) { lblDup.Text = "Recherche impossible."; return; }
-            r.Sort(delegate(List<Node> a, List<Node> b) { return ((b.Count - 1) * b[0].Size).CompareTo((a.Count - 1) * a[0].Size); });
-            long wasted = 0;
-            lvDup.BeginUpdate();
-            foreach (List<Node> g in r)
-            {
-                g.Sort(delegate(Node a, Node b)
-                {
-                    int c = a.Modified.CompareTo(b.Modified);
-                    return c != 0 ? c : string.Compare(a.FullPath, b.FullPath, StringComparison.OrdinalIgnoreCase);
-                });
-                wasted += (g.Count - 1) * g[0].Size;
-                ListViewGroup grp = new ListViewGroup(DupHeader(g[0].Name, g.Count, g[0].Size));
-                lvDup.Groups.Add(grp);
-                foreach (Node n in g)
-                {
-                    ListViewItem it = Row(n, n.Name, SizeCell(n.Size), DateCell(n.Modified), n.Parent != null ? n.Parent.FullPath : "");
-                    it.Group = grp;
-                    lvDup.Items.Add(it);
-                }
-            }
-            lvDup.EndUpdate();
-            lblDup.Text = (f.Cancel ? "Interrompu - " : "") + r.Count + " groupe(s), " + Util.FormatSize(wasted) +
-                          " recuperables en gardant une copie par groupe - " + scopePath;
-        }
-
-        void AutoCheck()
-        {
-            foreach (ListViewGroup g in lvDup.Groups)
-                for (int i = 0; i < g.Items.Count; i++) g.Items[i].Checked = (i > 0);   // la plus ancienne est en tete
-        }
-
-        void DeleteChecked()
-        {
-            List<Node> list = new List<Node>();
-            foreach (ListViewGroup g in lvDup.Groups)
-            {
-                int c = 0;
-                foreach (ListViewItem it in g.Items) if (it.Checked) { c++; list.Add((Node)it.Tag); }
-                if (c > 0 && c == g.Items.Count)
-                {
-                    MessageBox.Show("Le groupe \"" + g.Header + "\" a toutes ses copies cochees.\nGardez au moins une copie par groupe.", "SpaceLite", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-            }
-            if (list.Count == 0) { MessageBox.Show("Cochez d'abord les copies a supprimer.", "SpaceLite", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            if (DeleteRequested != null) DeleteRequested(list);
-        }
-
-        // Retire de la liste les fichiers qui n'existent plus, et les groupes devenus uniques.
-        public void PruneDuplicates()
-        {
-            lvDup.BeginUpdate();
-            foreach (ListViewItem it in new List<ListViewItem>(lvDup.Items.Cast<ListViewItem>()))
-            {
-                Node n = it.Tag as Node;
-                if (n != null && !File.Exists(n.FullPath)) it.Remove();
-            }
-            foreach (ListViewGroup g in new List<ListViewGroup>(lvDup.Groups.Cast<ListViewGroup>()))
-            {
-                if (g.Items.Count >= 2)
-                {
-                    Node n0 = (Node)g.Items[0].Tag;
-                    g.Header = DupHeader(n0.Name, g.Items.Count, n0.Size);
-                    continue;
-                }
-                foreach (ListViewItem it in new List<ListViewItem>(g.Items.Cast<ListViewItem>())) it.Remove();
-                lvDup.Groups.Remove(g);
-            }
-            lvDup.EndUpdate();
         }
 
         ListView MakeList(string[] cols, int[] widths, bool[] numeric)
@@ -1782,7 +1483,6 @@ namespace SpaceLite
         public void SetScan(Node root)
         {
             scan = root;
-            if (root == null) { lvDup.Items.Clear(); lvDup.Groups.Clear(); }
             tree.BeginUpdate();
             tree.Nodes.Clear();
             if (root != null)
@@ -2059,7 +1759,6 @@ namespace SpaceLite
             panel.Width = cfg.PanelWidth;
             panel.NodePicked += Reveal;
             panel.SearchRequested += DoSearch;
-            panel.DeleteRequested += DeleteMany;
             split = new Splitter();
             split.Dock = DockStyle.Right;
             split.Width = 5;
@@ -2430,60 +2129,6 @@ namespace SpaceLite
             else if (!IsUnder(view.Root, n) && target != null) SetView(target);
             else if (n == view.Root) return;
             view.Select(n);
-        }
-
-        void DetachNode(Node n)
-        {
-            for (Node p = n.Parent; p != null; p = p.Parent)
-            {
-                p.Size -= n.Size;
-                p.FileCount -= n.FileCount;
-                if (n.IsDir) p.DirCount -= n.DirCount + 1;
-            }
-            n.Parent.Children.Remove(n);
-        }
-
-        // Suppression de plusieurs fichiers (doublons coches) avec une seule confirmation.
-        void DeleteMany(List<Node> list)
-        {
-            if (list.Count == 0) return;
-            long total = 0;
-            bool net = false;
-            foreach (Node n in list) { total += n.Size; if (Util.IsNetworkPath(n.FullPath)) net = true; }
-            string msg = net
-                ? "ATTENTION : au moins un fichier est sur le reseau, sans corbeille.\nLa suppression sera DEFINITIVE pour ces fichiers.\n\nSupprimer " + list.Count + " fichier(s) (" + Util.FormatSize(total) + ") ?"
-                : "Mettre " + list.Count + " fichier(s) (" + Util.FormatSize(total) + ") a la corbeille ?";
-            if (MessageBox.Show(msg, "Suppression des doublons", MessageBoxButtons.YesNo, net ? MessageBoxIcon.Stop : MessageBoxIcon.Warning,
-                    MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-            int ok = 0, fail = 0;
-            long freed = 0;
-            Cursor = Cursors.WaitCursor;
-            try
-            {
-                foreach (Node n in list)
-                {
-                    if (n.Parent == null) continue;
-                    try
-                    {
-                        Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(n.FullPath, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-                            Util.IsNetworkPath(n.FullPath) ? Microsoft.VisualBasic.FileIO.RecycleOption.DeletePermanently
-                                                           : Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-                    }
-                    catch (Exception) { fail++; continue; }
-                    if (File.Exists(n.FullPath)) { fail++; continue; }
-                    freed += n.Size;
-                    DetachNode(n);
-                    ok++;
-                }
-            }
-            finally { Cursor = Cursors.Default; }
-            view.Select(null);
-            view.Relayout();
-            UpdateTitle();
-            panelStale = true;
-            SyncPanel(true);
-            panel.PruneDuplicates();
-            lblInfo.Text = ok + " fichier(s) supprime(s), " + Util.FormatSize(freed) + " liberes" + (fail > 0 ? " - " + fail + " echec(s)" : "");
         }
 
         void DoSearch(string text)
@@ -2943,14 +2588,19 @@ namespace SpaceLite
             bool still = n.IsDir ? Directory.Exists(n.FullPath) : File.Exists(n.FullPath);
             if (still) return;   // annule ou echec
 
-            DetachNode(n);
+            for (Node p = n.Parent; p != null; p = p.Parent)
+            {
+                p.Size -= n.Size;
+                p.FileCount -= n.FileCount;
+                if (n.IsDir) p.DirCount -= n.DirCount + 1;
+            }
+            n.Parent.Children.Remove(n);
             lblHover.Text = "";
             if (view.Root == n) SetView(n.Parent);
             else { view.Select(null); view.Relayout(); }
             UpdateTitle();
             panelStale = true;
             SyncPanel(true);
-            panel.PruneDuplicates();
         }
     }
 
