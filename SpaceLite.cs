@@ -2036,7 +2036,9 @@ namespace SpaceLite
         // Bloc "espace libre" : seulement si on a analyse la racine d'un lecteur.
         void PrepareFreeSpace(Node r)
         {
-            if (Util.IsUnc(r.FullPath)) return;   // la capacite d'un partage n'est pas celle du volume
+            // Partage ou lecteur mappe : la capacite lue est celle du volume du serveur (ou du quota), pas du dossier
+            // analyse ; "non compte" et "espace libre" y seraient faux (enormes), on ne les affiche pas.
+            if (Util.IsNetworkPath(r.FullPath)) return;
             try
             {
                 string root = System.IO.Path.GetPathRoot(r.FullPath);

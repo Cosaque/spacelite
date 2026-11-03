@@ -2,6 +2,7 @@
 
 ## 1.1 (en cours)
 - Chemins réseau : Ouvrir > « Chemin réseau (UNC)... » (saisie de `\\\\serveur\\partage`, connexion avec un autre compte possible, mot de passe non enregistré).
+- Lecteurs réseau mappés (H:...) : plus de blocs « non compté » / « espace libre » (la capacité du volume du serveur faussait tout).
 - Pas de test d'existence bloquant sur un chemin UNC ; message clair si le chemin est illisible.
 - Sur un partage ou un lecteur réseau, la suppression est définitive (pas de corbeille) : avertissement renforcé, « Non » par défaut.
 
